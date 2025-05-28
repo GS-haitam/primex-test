@@ -3,6 +3,9 @@
 # Optimisé pour Streamlit Community Cloud
 # =============================================================================
 
+import sqlite3
+import plotly.express as px
+import plotly.graph_objects as go
 import libsql_client #type:ignore
 import pandas as pd
 import streamlit as st
@@ -15,6 +18,10 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 PSW = "primex2025"
+
+# =============================================================================
+# CLASSE COMPTABILITÉ (Adaptée pour le cloud)
+# =============================================================================
 class ComptabiliteBTP:
     def __init__(self):
         # Configuration Turso depuis les secrets Streamlit
@@ -197,6 +204,30 @@ class ComptabiliteBTP:
         conn.close()
         return df
 
+# =============================================================================
+# AUTHENTIFICATION SIMPLE
+# =============================================================================
+
+def check_password():
+    """Vérification mot de passe simple"""
+    def password_entered():
+        if st.session_state["password"] == PSW:  # Changez ce mot de passe
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        st.markdown("### 🔐 Accès Sécurisé")
+        st.text_input("Mot de passe", type="password", on_change=password_entered, key="password")
+        st.info("💡 Entrez le mot de passe pour accéder à l'application")
+        return False
+    elif not st.session_state["password_correct"]:
+        st.text_input("Mot de passe", type="password", on_change=password_entered, key="password")
+        st.error("❌ Mot de passe incorrect")
+        return False
+    else:
+        return True
 
 # =============================================================================
 # INTERFACE PRINCIPALE

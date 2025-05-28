@@ -5,11 +5,14 @@
 
 import sqlite3
 import plotly.express as px
-import plotly.graph_objects as go
-import libsql_client #type:ignore
 import pandas as pd
 import streamlit as st
+import requests
+import base64
+import os
 from datetime import datetime, date
+
+
 # Configuration de la page (DOIT être en premier)
 st.set_page_config(
     page_title="Comptabilité BTP Laayoune",
@@ -19,28 +22,79 @@ st.set_page_config(
 )
 PSW = "primex2025"
 
-# =============================================================================
-# CLASSE COMPTABILITÉ (Adaptée pour le cloud)
-# =============================================================================
+
 class ComptabiliteBTP:
     def __init__(self):
-        # Configuration Turso depuis les secrets Streamlit
-        self.db_url = st.secrets["TURSO_DB_URL"]
-        self.auth_token = st.secrets["TURSO_AUTH_TOKEN"]
+        self.db_name = "comptabilite_btp.db"
         
-        # Créer client Turso
-        self.client = libsql_client.create_client(
-            url=self.db_url,
-            auth_token=self.auth_token
-        )
+        # Télécharger la DB depuis GitHub au démarrage
+        if "GITHUB_TOKEN" in st.secrets:
+            self.download_db_from_github()
         
         self.init_database()
     
+    def download_db_from_github(self):
+        """Télécharger la DB depuis GitHub"""
+        try:
+            url = f"https://api.github.com/repos/{st.secrets['GITHUB_REPO']}/contents/data/comptabilite_btp.db"
+            headers = {"Authorization": f"token {st.secrets['GITHUB_TOKEN']}"}
+            
+            response = requests.get(url, headers=headers)
+            if response.status_code == 200:
+                content = response.json()['content']
+                db_content = base64.b64decode(content)
+                with open(self.db_name, 'wb') as f:
+                    f.write(db_content)
+                print("✅ Base de données téléchargée depuis GitHub")
+        except Exception as e:
+            print(f"ℹ️ Première utilisation ou erreur téléchargement: {e}")
+    
+    def upload_db_to_github(self):
+        """Sauvegarder la DB sur GitHub après chaque modification"""
+        if "GITHUB_TOKEN" not in st.secrets:
+            return
+        
+        try:
+            url = f"https://api.github.com/repos/{st.secrets['GITHUB_REPO']}/contents/data/comptabilite_btp.db"
+            headers = {"Authorization": f"token {st.secrets['GITHUB_TOKEN']}"}
+            
+            # Lire le fichier SQLite
+            with open(self.db_name, 'rb') as f:
+                content = base64.b64encode(f.read()).decode()
+            
+            # Récupérer SHA du fichier existant
+            try:
+                response = requests.get(url, headers=headers)
+                sha = response.json().get('sha') if response.status_code == 200 else None
+            except:
+                sha = None
+            
+            # Préparer la requête
+            data = {
+                "message": f"Auto-save database - {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                "content": content,
+                "committer": {
+                    "name": "BTP App",
+                    "email": "app@btp-laayoune.com"
+                }
+            }
+            if sha:
+                data["sha"] = sha
+            
+            # Envoyer vers GitHub
+            response = requests.put(url, json=data, headers=headers)
+            if response.status_code in [200, 201]:
+                print("✅ Base de données sauvegardée sur GitHub")
+        except Exception as e:
+            print(f"⚠️ Erreur sauvegarde: {e}")
+    
     def init_database(self):
-        """Créer les tables si elles n'existent pas"""
+        """Créer la base de données et les tables (code SQLite standard)"""
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
         
         # Table transactions
-        self.client.execute('''
+        cursor.execute('''
         CREATE TABLE IF NOT EXISTS transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             date_transaction DATE NOT NULL,
@@ -57,7 +111,7 @@ class ComptabiliteBTP:
         ''')
         
         # Table comptes
-        self.client.execute('''
+        cursor.execute('''
         CREATE TABLE IF NOT EXISTS comptes (
             code_compte TEXT PRIMARY KEY,
             nom_compte TEXT NOT NULL,
@@ -66,9 +120,9 @@ class ComptabiliteBTP:
         )
         ''')
         
-        # Vérifier et initialiser les comptes
-        result = self.client.execute("SELECT COUNT(*) FROM comptes")
-        if result.rows[0][0] == 0:
+        # Initialiser les comptes
+        cursor.execute("SELECT COUNT(*) FROM comptes")
+        if cursor.fetchone()[0] == 0:
             comptes_principaux = [
                 ('INVEST', 'Investissement', 'ACTIF'),
                 ('SYS_BDC', 'Système BDC', 'ACTIF'),
@@ -76,40 +130,50 @@ class ComptabiliteBTP:
                 ('CHARGE_FIX', 'Charges Fixes', 'CHARGE'),
                 ('RECETTES', 'Recettes', 'PRODUIT')
             ]
-            
-            for compte in comptes_principaux:
-                self.client.execute(
-                    "INSERT INTO comptes (code_compte, nom_compte, type_compte) VALUES (?, ?, ?)",
-                    compte
-                )
+            cursor.executemany(
+                "INSERT INTO comptes (code_compte, nom_compte, type_compte) VALUES (?, ?, ?)",
+                comptes_principaux
+            )
+        
+        conn.commit()
+        conn.close()
     
     def ajouter_transaction(self, date_trans, compte_debit, compte_credit, 
                            montant, description, type_trans, ref_bdc=None, responsable=None):
-        """Ajouter une nouvelle transaction"""
+        """Ajouter transaction + auto-sauvegarde"""
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        
         try:
             # Insérer la transaction
-            self.client.execute('''
+            cursor.execute('''
             INSERT INTO transactions 
             (date_transaction, compte_debit, compte_credit, montant, description, 
              type_transaction, reference_bdc, responsable)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (str(date_trans), compte_debit, compte_credit, montant, description, 
+            ''', (date_trans, compte_debit, compte_credit, montant, description, 
                   type_trans, ref_bdc, responsable))
             
             # Mettre à jour les soldes
-            self.client.execute(
-                'UPDATE comptes SET solde_actuel = solde_actuel + ? WHERE code_compte = ?', 
-                (montant, compte_debit)
-            )
-            self.client.execute(
-                'UPDATE comptes SET solde_actuel = solde_actuel - ? WHERE code_compte = ?', 
-                (montant, compte_credit)
-            )
+            cursor.execute('UPDATE comptes SET solde_actuel = solde_actuel + ? WHERE code_compte = ?', 
+                          (montant, compte_debit))
+            cursor.execute('UPDATE comptes SET solde_actuel = solde_actuel - ? WHERE code_compte = ?', 
+                          (montant, compte_credit))
+            
+            conn.commit()
+            
+            # Auto-sauvegarde sur GitHub
+            self.upload_db_to_github()
             
             return True, "Transaction ajoutée avec succès"
         
         except Exception as e:
+            conn.rollback()
             return False, f"Erreur: {str(e)}"
+        
+        finally:
+            conn.close()
+    
     
     def get_transactions(self, limit=None):
         """Récupérer les transactions"""

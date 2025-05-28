@@ -18,7 +18,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
+PSW = "primex2025"
 # =============================================================================
 # CLASSE COMPTABILITÉ (Adaptée pour le cloud)
 # =============================================================================
@@ -209,7 +209,7 @@ class ComptabiliteBTP:
 def check_password():
     """Vérification mot de passe simple"""
     def password_entered():
-        if st.session_state["password"] == "btp2024":  # Changez ce mot de passe
+        if st.session_state["password"] == PSW:  # Changez ce mot de passe
             st.session_state["password_correct"] = True
             del st.session_state["password"]
         else:

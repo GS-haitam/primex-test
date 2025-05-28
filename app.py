@@ -20,7 +20,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-PSW = "primex2025"
+PSW = "primex2026"
 
 
 class ComptabiliteBTP:
